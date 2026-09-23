@@ -81,7 +81,7 @@ Averages are 3 min/100 MB per import and 30 min/25 GB per export (NOTES.md). A b
 **Onboarding evening (3,000 jobs):**
 
 | | Jobs × duration | Task-hours | Max tasks |
-|---|---|---|---|---|
+|---|---|---|---|
 | Imports | 2,400 × 3 min | 120 | 150 |
 | Exports | 600 × 30 min | 300 | 100 |
 | **Total** | | **420** | **250** |
