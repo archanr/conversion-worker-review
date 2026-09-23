@@ -1,4 +1,4 @@
-# Conversion worker: design review and repair
+# Conversion Worker
 
 - `DESIGN.md`: the design review
 - `NOTES.md`: assumptions, what I did and didn't fix, where I stopped, and how I used AI.
@@ -21,12 +21,6 @@ To typecheck (optional; this one needs `npm install`):
 ```sh
 npm install
 npm run typecheck
-```
-
-On Windows, run the baseline as follows. The `npm run test:baseline` script uses POSIX `VAR=value` syntax.
-
-```powershell
-$env:WORKER_IMPL="original"; node --experimental-strip-types --no-warnings --test test/worker.test.ts
 ```
 
 ## What the tests cover

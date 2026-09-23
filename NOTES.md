@@ -2,7 +2,7 @@
 
 ## Assumptions
 
-- **Results are kept for 90 days, the same as job metadata.** This choice moves the cost estimate more than anything else
+- **Results are kept for 90 days, the same as job metadata.** This choice changes the cost estimate more than anything else
 - **Durations and sizes.** Assuming average import takes 3 minutes and produces 100 MB of JSON ("seconds to several minutes", "up to 500 MB"), and an export takes 30 minutes and produces a 25 GB package ("tens of minutes", "10 GB to 40 GB")
 - **Timeouts are 20 minutes for imports and 90 minutes for exports.** Taken from "several minutes" and "tens of minutes" in the brief, with a lenient grace period
 - **A job waiting to "retry" still shows as** `queued`. 
@@ -28,10 +28,10 @@ Roughly in order of urgency.
 
 ## Where I stopped, and what I would do next
 
-Risks 1–8 are in `src/worker.ts`. Risks 1–7 each have a test that fails on the original handler and passes on the fixed one. Risk 8 didn't need its own test since the fix was just moving code so only the conversion step runs inside the `try` block. Risk 9 isn't fixed, because it lives in the poll loop, not the handler — that's why it's first on this list.
+Risks 1–8 are in `src/worker.ts`. Risks 1–7 each have a test that fails on the original handler and passes on the fixed one. Risk 8 didn't need its own test since the fix was just moving code so only the conversion step runs inside the `try` block. Risk 9 isn't fixed yet.
 
-1. **The poll loop (risk 9)** Limit it to one job at a time. On SIGTERM, stop picking up new jobs but let the lease keep protecting the one already in progress. Hold ECS scale-in protection while a conversion runs.
-2. **A heartbeat** While a conversion runs, keep renewing the lease and extending the SQS visibility timeout. Without this, a crashed worker's job just sits until the visibility timeout expires (up to 90 minutes for an export) before anything can pick it up again.
+1. **The poll loop (risk 9)** Limit runners to one job at a time. On SIGTERM, stop picking up new jobs but let the lease keep protecting the one already in progress. Hold ECS scale-in protection while a conversion runs.
+2. **Lease renewal** While a conversion runs, keep renewing the lease and extending the SQS visibility timeout. Without this, a crashed worker's job just sits until the visibility timeout expires (up to 90 minutes for an export) before anything can pick it up again.
 3. **Real adapters**, not placeholders: a child-process wrapper for the TypeScript import library, the JVM run in its own process group, and a multipart upload that reliably finishes within the attempt timeout.
 4. **An integration test against DynamoDB Local**, to confirm the real conditional writes behave the same way the in-memory test store assumes.
 5. **The DLQ-to-failed Lambda and the DynamoDB Stream webhook notifier**, so a job whose message gets dead-lettered still reaches a terminal state the caller can see.
@@ -44,7 +44,7 @@ I used Claude Sonnet in a chat session to complete this exercise and was used ex
 
 My process when using AI for tasks:
 
-1. Made sure I completely read the problem statement and understand the overall purpose (manually!)
+1. Made sure I completely read the problem statement and understand the overall purpose manually
 2. Ask AI about any software system terms/ideas that were unclear to me.
 3. Use the AI model in "Plan" mode where I type in plain english in my own words how the system should be designed and whether it has the right context.
 4. Follow steps 2-3 until the plan created by the model makes logical sense to me. Then ask AI to implement the plan.
