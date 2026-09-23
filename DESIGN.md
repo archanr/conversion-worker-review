@@ -76,7 +76,9 @@ If the new version starts failing, the system notices automatically and rolls ba
 
 ## 5. Sizing and cost
 
-Averages are 3 min/100 MB per import and 30 min/25 GB per export (NOTES.md). A big assumption is that results are kept **90 day** just like the metadata. Prices are us-east-1 on-demand x86: 1 vCPU / 4 GB ≈ $0.0405 + 4 × $0.00445 ≈ **$0.058/task-hour**.
+- Averages are 3 min/100 MB per import and 30 min/25 GB per export. 
+- Big assumption is that results are kept **90 day** just like the metadata. 
+- Prices are us-east-1 on-demand x86: 1 vCPU / 4 GB ≈ $0.0405 + (4 × $0.00445) ≈ **$0.058/task-hour**.
 
 **Onboarding evening (3,000 jobs):**
 
