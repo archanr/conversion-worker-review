@@ -28,8 +28,8 @@
 2. **Two queues with DLQs, two ECS services, one image.** The same image runs in both services with different settings: imports time out at 20 minutes and exports at 90, each queue's visibility timeout must be at least its attempt timeout plus grace period. Each service has its own task ceiling, and export tasks get 120 GiB of ephemeral storage.
 3. **Kill and reap on timeout.** When an attempt runs out of time, the worker kills the process and waits for it to exit before releasing the job. Exit code 2 means the input file is bad, so that job fails immediately instead of retrying.
 4. **Scaling that cannot kill live work.** Scale on visible and in-flight messages together rather than visible alone, and have workers hold ECS scale-in protection while they convert, so neither a scale-in nor a deploy can kill an export that is still running.
-5. **Every job reaches a terminal state the caller can see.** The DLQ's `maxReceiveCount` is 6, above the attempt budget of 3, so a job fails on its own terms before the message is dead-lettered. A small Lambda on the DLQ marks anything that still slips through as failed, and webhooks fire from a DynamoDB Stream whenever a job reaches a terminal state, so a crash between the commit and the send cannot lose one.
-6. **Conditional claim, lease, and fencing.** Covered in part 2. Each attempt writes to its own prefix, `jobs/{id}/attempts/{n}/…`, and a result is only published when a conditional write of `outputKey` succeeds. That write is the commit point, and an attempt that no longer owns the job cannot make it.
+5. **Every job reaches a terminal state the caller can see.** Every job always ends with a clear answer, "done" or "failed", so no one waits forever. Jobs get up to 3 tries before failing on their own. If one still slips through, a backup check catches it after 6 tries and marks it failed. Callers get notified reliably even if something crashes right at the finish line.
+6. **Conditional claim, lease, and fencing.** Each attempt at a job writes to its own private disk space, so two workers can never overwrite each other's results. A result only counts as "official" once a final safety check confirms this worker still owns the job, so a worker that's crashed or been replaced can't publish a stale or duplicate result even if it's still running.
 
 ## 3. Job lifecycle
 
@@ -70,7 +70,9 @@ stateDiagram-v2
 | **Attempt outcomes** | `AttemptOutcome`, with dimensions queue, outcome, release | The worker poll loop, from `handle()`'s return value, as CloudWatch EMF logs | `retry_scheduled` + `failed_exhausted` > 5% of attempts over 30 min; any sustained `superseded` | Compare memory utilization against outcomes by release — that separates sizing from a bad release, which gets rolled back. `superseded` means the lease is too short or clocks are wrong.  |
 | **Stuck jobs** | `ApproximateNumberOfMessagesVisible`, on the DLQ | AWS/SQS, natively | > 0 for 5 min | The DLQ Lambda has already failed the job, so no caller hangs; on-call finds the cause and redrives |
 
-**Deployment.** The worker, the API Lambda, and the CDK app all live in one repo. The infrastructure is split into a stateful stack (table, bucket, queues) that rarely changes, and a stateless stack (services, alarms) that changes often. Every merge to main goes through GitHub Actions: run tests and `cdk diff`, build an image tagged with the git SHA, deploy to staging, run a smoke suite against the real API, then promote to prod. Prod rolls out behind the ECS circuit breaker, which watches the attempt-failure-rate and DLQ-depth alarms and rolls back automatically; the `release` dimension shows whether new tasks are failing more than old ones. If a release turns out bad, redeploy the previous image. To pause work without losing it, set desired count to zero — jobs just wait in the queue, since a job's true state lives in its database record, not in whatever task is running it.
+**Deployment.** The worker, the API Lambda, and the CDK app all live in one repo. The infrastructure is split into a stateful stack (table, bucket, queues) that rarely changes and a stateless stack (services, alarms) that changes often. Every merge to main goes through GitHub Actions: run tests and `cdk diff`, build an image, deploy to staging, run a smoke suite against the real API, then promote to prod. 
+
+If the new version starts failing, the system notices automatically and rolls back to the last working version, no one has to catch it manually. If a bad version does slip through, we can just redeploy the old one. And if we ever need to pause everything (no new jobs starting), we can do that safely too. Nothing gets lost, jobs just wait their turn until we turn things back on.
 
 ## 5. Sizing and cost
 
@@ -90,11 +92,11 @@ Peak is 250 tasks, so 250 vCPU. The evening costs 420 × $0.058 ≈ **$25**
 
 | Line item | Volume | Rate | $/month |
 |---|---|---|---|
-| **S3: export packages** | 200/day × 25 GB × 90 d = 450 TB | $0.023/GB to 50 TB, $0.022 after | **9,950** |
-| S3: import JSON | 800/day × 0.1 GB × 90 d = 7.2 TB | $0.022/GB | 160 |
-| Fargate compute | 800 × 3 min + 200 × 30 min = 140 task-h/day | $0.058/task-h × 30 d | 245 |
-| Export ephemeral storage | 100 task-h/day × 30 d × 100 GB = 300,000 GB-h | $0.000111/GB-h | 35 |
-| CloudWatch, DynamoDB, SQS, API GW, Lambda | small at 1,000 jobs/day, even with polling | — | 150 |
+| **S3: Export packages** | 200 exports a day, 25 GB each, kept for 90 days → 450 TB stored | $0.023/GB to 50 TB, $0.022 after | **9,950** |
+| S3: Import JSON | 800 imports a day, 0.1 GB each, kept for 90 days → 7.2 TB stored | $0.022/GB | 160 |
+| Fargate compute | 800 imports at 3 min each plus 200 exports at 30 min each → 140 task-hours a day | $0.058/task-h × 30 d | 245 |
+| Export ephemeral storage | 100 export task-hours a day, 100 GB each, over 30 days → 300,000 GB-hours | $0.000111/GB-h | 35 |
+| CloudWatch, DynamoDB, SQS, API GW, Lambda | small at 1,000 jobs a day, even with polling | — | 150 |
 | **Total** | | | **~10,500** |
 
 **Export package storage is ~95% of the bill.** The single biggest cut is a lifecycle rule expiring packages after 7 days: 200 × 25 GB × 7 d = 35 TB × $0.023 ≈ **$800**, taking the total to **~$1.4k/month**
