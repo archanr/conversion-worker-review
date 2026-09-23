@@ -25,7 +25,7 @@
 ## 2. Smallest changes before releasing v1
 
 1. **One conversion per task.** (1 vCPU / 4 GB, concurrency only 1). Single-threaded work needs 2 GB, so an out of memory failures costs one job, not ten.
-2. **Two queues with DLQs, two ECS services, one image.** The same image runs in both services with different settings: imports time out at 20 minutes and exports at 90, each queue's visibility timeout must be at least its attempt timeout plus grace period. Each service has its own task ceiling, and export tasks get 120 GiB of ephemeral storage.
+2. **Two queues with DLQs, two ECS services, one image.** The same image runs in both services with different settings: imports time out at 20 minutes and exports at 90, each queue's visibility timeout must be at least its attempt timeout plus grace period. Each service has its own task ceiling, and export tasks get 120 GiB of temporary storage.
 3. **Kill and reap on timeout.** When an attempt runs out of time, the worker kills the process and waits for it to exit before releasing the job. Exit code 2 means the input file is bad, so that job fails immediately instead of retrying.
 4. **Scaling that cannot kill live work.** Scale on visible and in-flight messages together rather than visible alone, and have workers hold ECS scale-in protection while they convert, so neither a scale-in nor a deploy can kill an export that is still running.
 5. **Every job reaches a terminal state the caller can see.** Every job always ends with a clear answer, "done" or "failed", so no one waits forever. Jobs get up to 3 tries before failing on their own. If one still slips through, a backup check catches it after 6 tries and marks it failed. Callers get notified reliably even if something crashes right at the finish line.
@@ -76,15 +76,15 @@ If the new version starts failing, the system notices automatically and rolls ba
 
 ## 5. Sizing and cost
 
-Averages are 3 min/100 MB per import and 30 min/25 GB per export (NOTES.md). A big assumption is that results are kept 90 days just like the metadata. Prices are us-east-1 on-demand x86: 1 vCPU / 4 GB ≈ $0.0405 + 4 × $0.00445 ≈ **$0.058/task-hour**.
+Averages are 3 min/100 MB per import and 30 min/25 GB per export (NOTES.md). A big assumption is that results are kept **90 day** just like the metadata. Prices are us-east-1 on-demand x86: 1 vCPU / 4 GB ≈ $0.0405 + 4 × $0.00445 ≈ **$0.058/task-hour**.
 
 **Onboarding evening (3,000 jobs):**
 
-| | Jobs × duration | Task-hours | Max tasks | Drains in |
+| | Jobs × duration | Task-hours | Max tasks |
 |---|---|---|---|---|
-| Imports | 2,400 × 3 min | 120 | 150 | ~50 min |
-| Exports | 600 × 30 min | 300 | 100 | ~3 h |
-| **Total** | | **420** | **250** | |
+| Imports | 2,400 × 3 min | 120 | 150 |
+| Exports | 600 × 30 min | 300 | 100 |
+| **Total** | | **420** | **250** |
 
 Peak is 250 tasks, so 250 vCPU. The evening costs 420 × $0.058 ≈ **$25**
 
@@ -92,11 +92,12 @@ Peak is 250 tasks, so 250 vCPU. The evening costs 420 × $0.058 ≈ **$25**
 
 | Line item | Volume | Rate | $/month |
 |---|---|---|---|
-| **S3: Export packages** | 200 exports a day, 25 GB each, kept for 90 days → 450 TB stored | $0.023/GB to 50 TB, $0.022 after | **9,950** |
+| **S3: Export packages** | 200 exports a day x 25 GB each x 90 days = 450 TB stored | $0.023/GB to 50 TB, $0.022 after | **9,950** |
 | S3: Import JSON | 800 imports a day, 0.1 GB each, kept for 90 days → 7.2 TB stored | $0.022/GB | 160 |
-| Fargate compute | 800 imports at 3 min each plus 200 exports at 30 min each → 140 task-hours a day | $0.058/task-h × 30 d | 245 |
-| Export ephemeral storage | 100 export task-hours a day, 100 GB each, over 30 days → 300,000 GB-hours | $0.000111/GB-h | 35 |
+| Fargate compute | 800 imports x 3 min each + 200 exports x 30 min each = 140 task-hours a day | $0.058/task-hours × 30 d | 245 |
+| Export temporary storage | 100 export task-hours a day x 100 GB each x 30+ days = 300,000 GB-hours | $0.000111/GB-h | 35 |
 | CloudWatch, DynamoDB, SQS, API GW, Lambda | small at 1,000 jobs a day, even with polling | — | 150 |
 | **Total** | | | **~10,500** |
 
-**Export package storage is ~95% of the bill.** The single biggest cut is a lifecycle rule expiring packages after 7 days: 200 × 25 GB × 7 d = 35 TB × $0.023 ≈ **$800**, taking the total to **~$1.4k/month**
+**The export package storage is ~95% of the bill.** 
+- The single biggest cut is a lifecycle rule expiring packages after 7 days: 200/day × 25 GB × 7 d = 35 TB × $0.023 ≈ **$800**, taking the total to **~$1.4k/month**
